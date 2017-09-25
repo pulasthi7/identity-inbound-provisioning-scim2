@@ -18,13 +18,20 @@
 
 package org.wso2.carbon.identity.scim2.common.listener;
 
+import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.wso2.carbon.context.CarbonContext;
+import org.wso2.carbon.identity.claim.metadata.mgt.ClaimMetadataManagementService;
+import org.wso2.carbon.identity.claim.metadata.mgt.exception.ClaimMetadataException;
+import org.wso2.carbon.identity.claim.metadata.mgt.model.ExternalClaim;
 import org.wso2.carbon.identity.core.AbstractIdentityUserOperationEventListener;
 import org.wso2.carbon.identity.core.util.IdentityCoreConstants;
 import org.wso2.carbon.identity.core.util.IdentityUtil;
 import org.wso2.carbon.identity.scim2.common.exceptions.IdentitySCIMException;
 import org.wso2.carbon.identity.scim2.common.group.SCIMGroupHandler;
+import org.wso2.carbon.identity.scim2.common.internal.SCIMCommonDataHolder;
+import org.wso2.carbon.identity.scim2.common.utils.SCIMCommonConstants;
 import org.wso2.carbon.identity.scim2.common.utils.SCIMCommonUtils;
 import org.wso2.carbon.user.core.UserCoreConstants;
 import org.wso2.carbon.user.core.UserStoreException;
@@ -37,7 +44,6 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
-import java.util.regex.Pattern;
 
 /**
  * This is to perform SCIM related operation on User Operations.
@@ -75,10 +81,12 @@ public class SCIMUserOperationListener extends AbstractIdentityUserOperationEven
             if (!isEnable() || userStoreManager == null || !userStoreManager.isSCIMEnabled()) {
                 return true;
             }
+            this.populateSCIMAttributes(userName, claims);
         } catch (org.wso2.carbon.user.api.UserStoreException e) {
             throw new UserStoreException("Error while reading isScimEnabled from userstore manager", e);
+        } catch (IdentitySCIMException e) {
+            throw new UserStoreException("Error while adding SCIM attributes to the user.", e);
         }
-        this.populateSCIMAttributes(userName, claims);
         return true;
     }
 
@@ -361,7 +369,7 @@ public class SCIMUserOperationListener extends AbstractIdentityUserOperationEven
     }
 
     @Deprecated
-    public Map<String, String> getSCIMAttributes(String userName, Map<String, String> claimsMap) {
+    public Map<String, String> getSCIMAttributes(String userName, Map<String, String> claimsMap) throws IdentitySCIMException{
         return populateSCIMAttributes(userName, claimsMap);
     }
 
@@ -372,7 +380,7 @@ public class SCIMUserOperationListener extends AbstractIdentityUserOperationEven
      * @param claimsMap claimsMap
      * @return attributes map
      */
-    public Map<String, String> populateSCIMAttributes(String userName, Map<String, String> claimsMap) {
+    public Map<String, String> populateSCIMAttributes(String userName, Map<String, String> claimsMap) throws IdentitySCIMException {
         Map<String, String> attributes;
         if (claimsMap != null) {
             attributes = claimsMap;
@@ -380,17 +388,22 @@ public class SCIMUserOperationListener extends AbstractIdentityUserOperationEven
             attributes = new HashMap<>();
         }
 
-        Pattern pattern = Pattern.compile("urn:.*scim:schemas:core:.\\.0:id");
-        boolean containsScimIdClaim = false;
-        for (String claimUri : attributes.keySet()) {
-            if (pattern.matcher(claimUri).matches()) {
-                containsScimIdClaim = true;
-                break;
+        ClaimMetadataManagementService claimMgtService = SCIMCommonDataHolder.getInstance()
+                .getClaimMetadataManagementService();
+        String tenantDomain = CarbonContext.getThreadLocalCarbonContext().getTenantDomain();
+        try {
+            ExternalClaim externalClaim = claimMgtService.getExternalClaim(SCIMCommonConstants.SCIM_CORE_CLAIM_DIALECT,
+                    SCIMConstants.CommonSchemaConstants.ID_URI, tenantDomain);
+            if (externalClaim != null) {
+                createIdClaim(attributes, externalClaim.getMappedLocalClaim(), tenantDomain);
+            } else {
+                throw new IdentitySCIMException(String.format("No local claim mapping for SCIM ID. Make sure the %s " +
+                                "claim is mapped to a local claim for tenant %s.",
+                        SCIMConstants.CommonSchemaConstants.ID_URI, tenantDomain));
             }
-        }
-        if (!containsScimIdClaim) {
-            String id = UUID.randomUUID().toString();
-            attributes.put(SCIMConstants.CommonSchemaConstants.ID_URI, id);
+        } catch (ClaimMetadataException e) {
+            throw new IdentitySCIMException(String.format("Error when listing claim mapping for %s in tenant domain:%s",
+                    SCIMConstants.CommonSchemaConstants.ID_URI, tenantDomain), e);
         }
 
         Date date = new Date();
@@ -403,4 +416,25 @@ public class SCIMUserOperationListener extends AbstractIdentityUserOperationEven
         return attributes;
     }
 
+    protected void createIdClaim(Map<String, String> claims, String localIdClaim, String tenant) throws
+            IdentitySCIMException {
+        if (StringUtils.isBlank(localIdClaim)) {
+            throw new IdentitySCIMException(String.format("Empty local claim mapping for SCIM ID. Make sure the %s " +
+                            "claim is mapped to a local claim for tenant %s.",
+                    SCIMConstants.CommonSchemaConstants.ID_URI, tenant));
+        }
+
+        if (claims.containsKey(localIdClaim)) {
+            if (claims.containsKey(SCIMConstants.CommonSchemaConstants.ID_URI)) {
+                claims.remove(SCIMConstants.CommonSchemaConstants.ID_URI);
+            }
+        } else {
+            if (claims.containsKey(SCIMConstants.CommonSchemaConstants.ID_URI)) {
+                claims.put(localIdClaim, claims.get(SCIMConstants.CommonSchemaConstants.ID_URI));
+                claims.remove(SCIMConstants.CommonSchemaConstants.ID_URI);
+            } else {
+                claims.put(localIdClaim, UUID.randomUUID().toString());
+            }
+        }
+    }
 }

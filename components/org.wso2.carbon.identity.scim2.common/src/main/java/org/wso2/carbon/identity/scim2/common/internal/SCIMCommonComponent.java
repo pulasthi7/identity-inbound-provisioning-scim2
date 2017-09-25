@@ -22,6 +22,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.osgi.framework.ServiceRegistration;
 import org.osgi.service.component.ComponentContext;
+import org.wso2.carbon.identity.claim.metadata.mgt.ClaimMetadataManagementService;
 import org.wso2.carbon.identity.core.util.IdentityCoreInitializedEvent;
 import org.wso2.carbon.identity.core.util.IdentityUtil;
 import org.wso2.carbon.identity.scim2.common.listener.SCIMTenantMgtListener;
@@ -52,6 +53,9 @@ import java.util.concurrent.Executors;
  * @scr.reference name="user.realmservice.default"
  * interface="org.wso2.carbon.user.core.service.RealmService" cardinality="1..1"
  * policy="dynamic" bind="setRealmService" unbind="unsetRealmService"
+ * @scr.reference name="ClaimMetadataManagementService"
+ * interface="org.wso2.carbon.identity.claim.metadata.mgt.ClaimMetadataManagementService" cardinality="1..1"
+ * policy="dynamic" bind="setClaimMetadataManagementService" unbind="unsetClaimMetadataManagementService"
  */
 public class SCIMCommonComponent {
     private static Log logger = LogFactory.getLog(SCIMCommonComponent.class);
@@ -110,6 +114,15 @@ public class SCIMCommonComponent {
     protected void setIdentityCoreInitializedEventService(IdentityCoreInitializedEvent identityCoreInitializedEvent) {
         /* reference IdentityCoreInitializedEvent service to guarantee that this component will wait until identity core
          is started */
+    }
+
+    protected void unsetClaimMetadataManagementService(ClaimMetadataManagementService claimMetadataManagementService) {
+        SCIMCommonDataHolder.getInstance().setClaimMetadataManagementService(null);
+    }
+
+    protected void setClaimMetadataManagementService(ClaimMetadataManagementService claimMetadataManagementService) {
+        SCIMCommonDataHolder.getInstance().setClaimMetadataManagementService(claimMetadataManagementService);
+
     }
 
     /**

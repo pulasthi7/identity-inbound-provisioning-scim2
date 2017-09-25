@@ -19,12 +19,17 @@
 package org.wso2.carbon.identity.scim2.common.impl;
 
 import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.collections.MapUtils;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.wso2.carbon.CarbonConstants;
+import org.wso2.carbon.context.PrivilegedCarbonContext;
 import org.wso2.carbon.identity.application.common.IdentityApplicationManagementException;
 import org.wso2.carbon.identity.application.common.model.ServiceProvider;
+import org.wso2.carbon.identity.claim.metadata.mgt.ClaimMetadataManagementService;
+import org.wso2.carbon.identity.claim.metadata.mgt.exception.ClaimMetadataException;
+import org.wso2.carbon.identity.claim.metadata.mgt.model.ExternalClaim;
 import org.wso2.carbon.identity.core.util.IdentityUtil;
 import org.wso2.carbon.identity.scim2.common.exceptions.IdentitySCIMException;
 import org.wso2.carbon.identity.scim2.common.group.SCIMGroupHandler;
@@ -60,6 +65,7 @@ import org.wso2.charon3.core.utils.codeutils.Node;
 import org.wso2.charon3.core.utils.codeutils.SearchRequest;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -140,14 +146,19 @@ public class SCIMUserManager implements UserManager {
             if (claimsMap.containsKey(SCIMConstants.UserSchemaConstants.USER_NAME_URI)) {
                 claimsMap.remove(SCIMConstants.UserSchemaConstants.USER_NAME_URI);
             }
+            mapClaimsToLocal(claimsMap);
             carbonUM.addUser(user.getUserName(), user.getPassword(), null, claimsMap, null);
             log.info("User: " + user.getUserName() + " is created through SCIM.");
+            mapLocalClaimsToSCIM(claimsMap);
 
         } catch (UserStoreException e) {
             String errMsg = "Error in adding the user: " + user.getUserName() + " to the user store. ";
             errMsg += e.getMessage();
             throw new CharonException(errMsg, e);
-        }
+        } catch (ClaimMetadataException e) {
+            throw new CharonException("Claim mapping failed. The scim claims may not have mapped properly to local " +
+                    "claims", e);
+        } 
         return user;
     }
 
@@ -156,7 +167,7 @@ public class SCIMUserManager implements UserManager {
         if (log.isDebugEnabled()) {
             log.debug("Retrieving user: " + userId);
         }
-        User scimUser;
+        User scimUser = null;
         try {
             ClaimMapping[] coreClaims;
             ClaimMapping[] userClaims;
@@ -1289,5 +1300,56 @@ public class SCIMUserManager implements UserManager {
             }
         }
         return requiredClaimList;
+    }
+
+    protected void mapClaimsToLocal(Map<String, String> claims) throws ClaimMetadataException {
+        if (MapUtils.isEmpty(claims)) {
+            return;
+        }
+        String tenantDomain = PrivilegedCarbonContext.getThreadLocalCarbonContext().getTenantDomain();
+        ClaimMetadataManagementService claimMgtService = (ClaimMetadataManagementService) PrivilegedCarbonContext
+                .getThreadLocalCarbonContext().getOSGiService(ClaimMetadataManagementService.class, null);
+        List<ExternalClaim> externalClaims = claimMgtService.getExternalClaims(SCIMCommonConstants
+                .SCIM_CORE_CLAIM_DIALECT, tenantDomain);
+        Map<String, String> claimUriMapping = new HashMap<>();
+        for (ExternalClaim externalClaim : externalClaims) {
+            if (claims.containsKey(externalClaim.getClaimURI())) {
+                claimUriMapping.put(externalClaim.getClaimURI(), externalClaim.getMappedLocalClaim());
+            }
+        }
+        Map<String, String> mappedClaims = new HashMap<>();
+        for (Map.Entry<String, String> entry : claims.entrySet()) {
+            if (claimUriMapping.containsKey(entry.getKey())) {
+                mappedClaims.put(claimUriMapping.get(entry.getKey()), entry.getValue());
+            }
+        }
+        claims.clear();
+        claims.putAll(mappedClaims);
+    }
+
+    protected void mapLocalClaimsToSCIM(Map<String, String> claims) throws ClaimMetadataException {
+        if (MapUtils.isEmpty(claims)) {
+            return;
+        }
+
+        String tenantDomain = PrivilegedCarbonContext.getThreadLocalCarbonContext().getTenantDomain();
+        ClaimMetadataManagementService claimMgtService = (ClaimMetadataManagementService) PrivilegedCarbonContext
+                .getThreadLocalCarbonContext().getOSGiService(ClaimMetadataManagementService.class, null);
+        List<ExternalClaim> externalClaims = claimMgtService.getExternalClaims(SCIMCommonConstants
+                .SCIM_CORE_CLAIM_DIALECT, tenantDomain);
+        Map<String, String> claimUriMapping = new HashMap<>();
+        for (ExternalClaim externalClaim : externalClaims) {
+            if (claims.containsKey(externalClaim.getMappedLocalClaim())) {
+                claimUriMapping.put(externalClaim.getMappedLocalClaim(), externalClaim.getClaimURI());
+            }
+        }
+        Map<String, String> mappedClaims = new HashMap<>();
+        for (Map.Entry<String, String> entry : claims.entrySet()) {
+            if (claimUriMapping.containsKey(entry.getKey())) {
+                mappedClaims.put(claimUriMapping.get(entry.getKey()), entry.getValue());
+            }
+        }
+        claims.clear();
+        claims.putAll(mappedClaims);
     }
 }
